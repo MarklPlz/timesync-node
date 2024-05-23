@@ -21,7 +21,8 @@ int main(void) {
 
     // Setze die Socket-Option für Broadcast
     int broadcastEnable = 1;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
+    if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST,
+                   &broadcastEnable, sizeof(broadcastEnable)) < 0) {
         perror("setsockopt (SO_BROADCAST) failed");
         close(sockfd);
         exit(EXIT_FAILURE);
@@ -44,14 +45,16 @@ int main(void) {
 
     // Empfange Broadcast-Nachrichten
     while (1) {
-        int recvlen = recvfrom(sockfd, buffer, BUFFSIZE, 0, (struct sockaddr *)&addr, &addr_len);
+        int recvlen = recvfrom(sockfd, buffer, BUFFSIZE, 0,
+                               (struct sockaddr *)&addr, &addr_len);
         if (recvlen < 0) {
             perror("recvfrom failed");
             close(sockfd);
             exit(EXIT_FAILURE);
         }
         buffer[recvlen] = '\0'; // Null-terminiere den String
-        printf("Empfangen von %s:%d: '%s'\n", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port), buffer);
+        printf("Empfangen von %s:%d: '%s'\n",
+               inet_ntoa(addr.sin_addr), ntohs(addr.sin_port), buffer);
     }
 
     close(sockfd);
