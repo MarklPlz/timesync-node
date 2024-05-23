@@ -12,7 +12,7 @@ $ git clone https://github.com/MarklPlz/timesync-node.git
 # Go into the repository
 $ cd timesync-node
 
-# Compile the source files
+# Compile the source file
 $ make
 
 # Run the program
