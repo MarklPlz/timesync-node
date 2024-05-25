@@ -4,6 +4,15 @@
 #include <string.h>
 #include <unistd.h>
 
+/*
+To Do:
+- CRC Berechnung
+- Synchronisieren der Zeit
+- Trigger auf Pin Toggle
+- Speichern der Zeitstempel in Array
+- Endlosschleife verlassen
+*/
+
 #define PORT 12345
 #define BUFFSIZE 1024
 
