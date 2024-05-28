@@ -2,7 +2,7 @@
 CC = gcc
 
 # Compiler flags
-CFLAGS = -Wall -Wextra -pedantic -O3 -std=c18
+CFLAGS = -Wall -Wextra -pedantic -O3 -std=c23 -D_POSIX_C_SOURCE=199309L
 
 # Source files
 SRC = src/timesync-node.c
