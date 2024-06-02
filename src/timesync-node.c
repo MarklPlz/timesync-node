@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <time.h>
+#include <wiringPi.h> // apt install wiringpi
 
 // https://docs.google.com/document/d/1HvjNvKx5gJ1GtRJtmMu9Jwueku3i7r2VC9iElPTr-Uw/edit#heading=h.fbg9cypbzerm
 // Tick alle 5ms, kein microtick
@@ -24,6 +25,7 @@ To Do:
 #define MULTICAST_GROUP "224.0.0.1"
 #define PORT 12345
 #define BUFFSIZE 1024
+#define PIN 0
 
 int sockfd;
 struct ip_mreq mreq;
@@ -66,7 +68,31 @@ void increment_value_every_5ms(int *value, int iterations) {
   }
 }
 
+uint16_t crc16(const uint8_t *data, size_t length, uint16_t poly, uint16_t init_val) {
+    uint16_t crc = init_val;
+    while (length--) {
+        crc ^= (*data++) << 8;
+        for (uint8_t i = 0; i < 8; i++) {
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ poly;
+            } else {
+                crc <<= 1;
+            }
+        }
+        crc &= 0xFFFF; // Sicherstellen, dass CRC 16-bit bleibt
+    }
+    return crc;
+}
+
 int main(void) {
+  if (wiringPiSetup() == -1) {
+      printf("wiringPi-Setup fehlgeschlagen!\n");
+      return 1;
+  }
+  
+  pinMode(PIN, INPUT);
+  int pinState = digitalRead(PIN);
+  
   struct sockaddr_in addr;
   socklen_t addr_len = sizeof(addr);
   char buffer[BUFFSIZE];
@@ -116,6 +142,7 @@ int main(void) {
       close(sockfd);
       exit(EXIT_FAILURE);
     }
+    uint16_t crc_value = crc16(buffer, recvlen, 0x1021, 0xFFFF);
     buffer[recvlen] = '\0'; // Null-terminiere den String
     printf("Empfangen von %s:%d: '%s'\n", inet_ntoa(addr.sin_addr),
            ntohs(addr.sin_port), buffer);
