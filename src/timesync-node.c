@@ -26,10 +26,13 @@ To Do:
 #define BUFFSIZE 11 * 8
 #define PIN 0
 
+
 int sockfd;
 struct in_addr mreq;
 
-void cleanup() {
+
+void cleanup(int signum) {
+  (void)signum;   // signum parameter void casten, wegen W unused Parameter
   // Multicast-Gruppe verlassen
   if (setsockopt(sockfd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq)) <
       0) {
@@ -39,6 +42,7 @@ void cleanup() {
   printf("Multicast-Gruppe verlassen und Socket geschlossen.\n");
   exit(EXIT_SUCCESS);
 }
+
 
 void increment_value_every_5ms(int *value, int iterations) {
   struct timespec start_time, current_time;
@@ -68,6 +72,7 @@ void increment_value_every_5ms(int *value, int iterations) {
   }
 }
 
+
 uint16_t crc16(const char *data, size_t length, uint16_t poly,
                uint16_t init_val) {
   uint16_t crc = init_val;
@@ -84,6 +89,8 @@ uint16_t crc16(const char *data, size_t length, uint16_t poly,
   }
   return crc;
 }
+
+
 
 int main(void) {
 
@@ -136,7 +143,7 @@ int main(void) {
       close(sockfd);
       exit(EXIT_FAILURE);
     }
-    uint16_t crc_value = crc16(buffer, recvlen, 0x1021, 0xFFFF);
+    uint16_t crc_value = crc16(buffer, recvlen, 0x1021, 0x0000);
     buffer[recvlen] = '\0'; // Null-terminiere den String
     printf("Empfangen von %s:%d: '%s'\n", inet_ntoa(addr.sin_addr),
            ntohs(addr.sin_port), buffer);
