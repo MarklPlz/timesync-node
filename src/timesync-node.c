@@ -6,19 +6,17 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <wiringPi.h> // apt install wiringpi
 
 // https://docs.google.com/document/d/1HvjNvKx5gJ1GtRJtmMu9Jwueku3i7r2VC9iElPTr-Uw/edit#heading=h.fbg9cypbzerm
 // Tick alle 5ms, kein microtick
 
 /*
 To Do:
-- CRC checken
 - Synchronisieren der Zeit
-- Trigger auf Pin Toggle
-- Speichern der Zeitstempel in Array
-- Endlosschleife verlassen
+- Trigger auf Pin Toggle & Speichern der Zeitstempel
+- CRC checken
 - Error Handling für maximale Verfügbarkeit
-- speichern asynchron
 */
 
 #define MULTICAST_GROUP "224.0.0.1"
@@ -26,14 +24,30 @@ To Do:
 #define BUFFSIZE 11 * 8
 #define PIN 0
 
-
 int sockfd;
 struct in_addr mreq;
 
 
+void myInterrupt(void) {
+  printf("Interrupt erkannt!\n");
+  // hier datei abspeichern
+  // Open file for writing
+  FILE *csvfile = fopen("./timestamps_3.csv", "w");
+  if (csvfile == NULL) {
+    printf("writing to file failed\n");
+  }
+
+  // Write data to the file
+  fprintf(csvfile, "Measured time [us]\n");
+  for (int i = 0; i < length; ++i) {
+    fprintf(csvfile, "%d\n", timestamps);
+  }
+}
+
+
+// Multicast-Gruppe verlassen
 void cleanup(int signum) {
-  (void)signum;   // signum parameter void casten, wegen W unused Parameter
-  // Multicast-Gruppe verlassen
+  (void)signum; // signum parameter void casten, wegen W unused Parameter
   if (setsockopt(sockfd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq)) <
       0) {
     perror("setsockopt - IP_DROP_MEMBERSHIP");
@@ -73,8 +87,8 @@ void increment_value_every_5ms(int *value, int iterations) {
 }
 
 
-uint16_t crc16(const char *data, size_t length, uint16_t poly,
-               uint16_t init_val) {
+uint16_t calc_crc16(const char *data, size_t length, uint16_t poly,
+                    uint16_t init_val) {
   uint16_t crc = init_val;
   while (length--) {
     crc ^= (*data++) << 8;
@@ -91,8 +105,22 @@ uint16_t crc16(const char *data, size_t length, uint16_t poly,
 }
 
 
-
 int main(void) {
+
+  // Initialisierung der WiringPi-Bibliothek
+  if (wiringPiSetup() == -1) {
+    printf("Fehler bei der Initialisierung von WiringPi!\n");
+    return 1;
+  }
+
+  // Konfiguration des Pins als Eingang
+  pinMode(PIN, INPUT);
+
+  // Aktivierung des Interrupts bei steigender Flanke (HIGH)
+  if (wiringPiISR(PIN, INT_EDGE_RISING, &myInterrupt) < 0) {
+    printf("Fehler beim Einrichten des Interrupts!\n");
+    return 1;
+  }
 
   struct sockaddr_in addr;
   socklen_t addr_len = sizeof(addr);
@@ -135,6 +163,10 @@ int main(void) {
 
   // Empfange Multicast-Nachrichten
   while (1) {
+    int value = 0;
+    int iterations = 100; // Anzahl der Inkrementierungen
+
+    increment_value_every_5ms(&value, iterations);
     int recvlen = recvfrom(sockfd, buffer, BUFFSIZE, 0,
                            (struct sockaddr *)&addr, &addr_len);
     if (recvlen < 0) {
@@ -143,7 +175,7 @@ int main(void) {
       close(sockfd);
       exit(EXIT_FAILURE);
     }
-    uint16_t crc_value = crc16(buffer, recvlen, 0x1021, 0x0000);
+    uint16_t crc_value = calc_crc16(buffer, recvlen, 0x1021, 0x0000);
     buffer[recvlen] = '\0'; // Null-terminiere den String
     printf("Empfangen von %s:%d: '%s'\n", inet_ntoa(addr.sin_addr),
            ntohs(addr.sin_port), buffer);
@@ -152,27 +184,6 @@ int main(void) {
 
   cleanup(SIGINT); // Bereinigen und beenden bei Fehler
   close(sockfd);
-
-  int value = 0;
-  int iterations = 100; // Anzahl der Inkrementierungen
-
-  increment_value_every_5ms(&value, iterations);
-
-  int length = 5;
-  int timestamps = 1;
-
-  // Open file for writing
-  FILE *csvfile = fopen("./timestamps_3.csv", "w");
-  if (csvfile == NULL) {
-    printf("writing to file failed\n");
-    return 1;
-  }
-
-  // Write data to the file
-  fprintf(csvfile, "Measured time [us]\n");
-  for (int i = 0; i < length; ++i) {
-    fprintf(csvfile, "%d\n", timestamps);
-  }
 
   return 0;
 }
