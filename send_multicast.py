@@ -13,4 +13,4 @@ sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MULTICAST_TTL)
 
 # For Python 3, change next line to 'sock.sendto(b"robot", ...' to avoid the
 # "bytes-like object is required" msg (https://stackoverflow.com/a/42612820)
-sock.sendto(b'robot', (MCAST_GRP, MCAST_PORT))
+sock.sendto(bytearray.fromhex('BE BA FE CA ED FE EF BE AD DE 43 5A'), (MCAST_GRP, MCAST_PORT))

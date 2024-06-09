@@ -1,12 +1,12 @@
 #include <arpa/inet.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <time.h>
+#include <time.h> // clock_gettime(CLOCK_MONOTONIC, &start_time);
 #include <unistd.h>
-#include <wiringPi.h> // apt install wiringpi
 
 // https://docs.google.com/document/d/1HvjNvKx5gJ1GtRJtmMu9Jwueku3i7r2VC9iElPTr-Uw/edit#heading=h.fbg9cypbzerm
 // Tick alle 5ms, kein microtick
@@ -15,39 +15,53 @@
 To Do:
 - Synchronisieren der Zeit
 - Trigger auf Pin Toggle & Speichern der Zeitstempel
-- CRC checken
 - Error Handling für maximale Verfügbarkeit
 */
 
 #define MULTICAST_GROUP "224.0.0.1"
 #define PORT 12345
-#define BUFFSIZE 11 * 8
-#define PIN 0
+#define BUFFSIZE 12
 
 int sockfd;
 struct in_addr mreq;
 
+void join_multicast(struct sockaddr_in addr) {
 
-void myInterrupt(void) {
-  printf("Interrupt erkannt!\n");
-  // hier datei abspeichern
-  // Open file for writing
-  FILE *csvfile = fopen("./timestamps_3.csv", "w");
-  if (csvfile == NULL) {
-    printf("writing to file failed\n");
+  // Create UDP-Socket
+  if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+    perror("socket creation failed");
+    exit(EXIT_FAILURE);
   }
 
-  // Write data to the file
-  fprintf(csvfile, "Measured time [us]\n");
-  for (int i = 0; i < length; ++i) {
-    fprintf(csvfile, "%d\n", timestamps);
+  // Configure Address
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY); // Empfange von allen Interfaces
+  addr.sin_port = htons(PORT);
+
+  // Bind Socket
+  if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    perror("bind failed");
+    close(sockfd);
+    exit(EXIT_FAILURE);
   }
+
+  // Join Multicast-Group
+  mreq.s_addr = inet_addr(MULTICAST_GROUP);
+  mreq.s_addr = htonl(INADDR_ANY);
+  if (setsockopt(sockfd, IPPROTO_IP, IP_MULTICAST_IF, &mreq, sizeof(mreq)) <
+      0) {
+    perror("setsockopt");
+    close(sockfd);
+    exit(EXIT_FAILURE);
+  }
+
+  printf("Waiting for messages.\nMulticast-Group: %s\nPort: %d\n",
+         MULTICAST_GROUP, PORT);
 }
 
-
-// Multicast-Gruppe verlassen
-void cleanup(int signum) {
-  (void)signum; // signum parameter void casten, wegen W unused Parameter
+void leave_multicast(int signum) {
+  (void)signum; // void cast, W-unused-Parameter
   if (setsockopt(sockfd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, sizeof(mreq)) <
       0) {
     perror("setsockopt - IP_DROP_MEMBERSHIP");
@@ -57,37 +71,7 @@ void cleanup(int signum) {
   exit(EXIT_SUCCESS);
 }
 
-
-void increment_value_every_5ms(int *value, int iterations) {
-  struct timespec start_time, current_time;
-  long elapsed_time_ms;
-
-  // Startzeit abrufen
-  clock_gettime(CLOCK_MONOTONIC, &start_time);
-
-  int count = 0;
-  while (count < iterations) {
-    // Aktuelle Zeit abrufen
-    clock_gettime(CLOCK_MONOTONIC, &current_time);
-
-    // Berechnung der vergangenen Zeit in Millisekunden
-    elapsed_time_ms = (current_time.tv_sec - start_time.tv_sec) * 1000 +
-                      (current_time.tv_nsec - start_time.tv_nsec) / 1000000;
-
-    // Überprüfen, ob 5 ms vergangen sind
-    if (elapsed_time_ms >= 5) {
-      (*value)++;
-      printf("Current value: %d\n", *value);
-
-      // Startzeit für die nächste Messung aktualisieren
-      start_time = current_time;
-      count++;
-    }
-  }
-}
-
-
-uint16_t calc_crc16(const char *data, size_t length, uint16_t poly,
+uint16_t calc_crc16(uint8_t *data, size_t length, uint16_t poly,
                     uint16_t init_val) {
   uint16_t crc = init_val;
   while (length--) {
@@ -104,85 +88,57 @@ uint16_t calc_crc16(const char *data, size_t length, uint16_t poly,
   return crc;
 }
 
-
 int main(void) {
 
-  // Initialisierung der WiringPi-Bibliothek
-  if (wiringPiSetup() == -1) {
-    printf("Fehler bei der Initialisierung von WiringPi!\n");
-    return 1;
-  }
-
-  // Konfiguration des Pins als Eingang
-  pinMode(PIN, INPUT);
-
-  // Aktivierung des Interrupts bei steigender Flanke (HIGH)
-  if (wiringPiISR(PIN, INT_EDGE_RISING, &myInterrupt) < 0) {
-    printf("Fehler beim Einrichten des Interrupts!\n");
-    return 1;
-  }
+  // Setting up Signal-Handler for SIGINT (Ctrl+C)
+  signal(SIGINT, leave_multicast);
 
   struct sockaddr_in addr;
+  join_multicast(addr);
   socklen_t addr_len = sizeof(addr);
-  char buffer[BUFFSIZE];
 
-  // Signal-Handler für SIGINT (Ctrl+C) einrichten
-  signal(SIGINT, cleanup);
+  uint8_t message[BUFFSIZE];
+  uint16_t recv_msgcnt = 0;
+  uint64_t recv_tmstmp = 0;
+  uint16_t recv_crc = 0;
+  uint16_t crc_value = 0;
 
-  // Erstelle ein UDP-Socket
-  if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-    perror("socket creation failed");
-    exit(EXIT_FAILURE);
-  }
+  // Initialize Timestamps
+  struct timespec msg_tmstmp, local_tmstmp;
+  clock_gettime(CLOCK_MONOTONIC, &msg_tmstmp);
+  local_tmstmp = msg_tmstmp;
 
-  // Konfiguriere die Adresse
-  memset(&addr, 0, addr_len);
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY); // Empfange von allen Interfaces
-  addr.sin_port = htons(PORT);
-
-  // Binde das Socket an die Adresse
-  if (bind(sockfd, (struct sockaddr *)&addr, addr_len) < 0) {
-    perror("bind failed");
-    close(sockfd);
-    exit(EXIT_FAILURE);
-  }
-
-  // Beitreten zur Multicast-Gruppe
-  mreq.s_addr = inet_addr(MULTICAST_GROUP);
-  mreq.s_addr = htonl(INADDR_ANY);
-  if (setsockopt(sockfd, IPPROTO_IP, IP_MULTICAST_IF, &mreq, sizeof(mreq)) <
-      0) {
-    perror("setsockopt");
-    close(sockfd);
-    exit(EXIT_FAILURE);
-  }
-
-  printf("Warte auf Nachrichten von der Multicast-Gruppe %s auf Port %d...\n",
-         MULTICAST_GROUP, PORT);
-
-  // Empfange Multicast-Nachrichten
   while (1) {
-    int value = 0;
-    int iterations = 100; // Anzahl der Inkrementierungen
-
-    increment_value_every_5ms(&value, iterations);
-    int recvlen = recvfrom(sockfd, buffer, BUFFSIZE, 0,
+    int recvlen = recvfrom(sockfd, message, BUFFSIZE, 0,
                            (struct sockaddr *)&addr, &addr_len);
     if (recvlen < 0) {
       perror("recvfrom failed");
-      cleanup(SIGINT); // Bereinigen und beenden bei Fehler
+      leave_multicast(SIGINT);
       close(sockfd);
       exit(EXIT_FAILURE);
     }
-    uint16_t crc_value = calc_crc16(buffer, recvlen, 0x1021, 0x0000);
-    buffer[recvlen] = '\0'; // Null-terminiere den String
-    printf("Empfangen von %s:%d: '%s'\n", inet_ntoa(addr.sin_addr),
-           ntohs(addr.sin_port), buffer);
-    printf("crc: %d", crc_value);
+
+    // Check 12 Byte Message
+    if (recvlen == 12) {
+      clock_gettime(CLOCK_MONOTONIC, &msg_tmstmp); // Timestamp Message
+
+      crc_value = calc_crc16(message, BUFFSIZE - 2, 0x1021, 0x0000);
+      recv_crc = (message[10] << 8) | message[11]; // CRC BIG ENDIANESS
+
+      // Check CRC
+      if (recv_crc == crc_value) {
+        recv_msgcnt = (message[1] << 8) | message[0];
+        recv_tmstmp =
+            ((uint64_t)message[9] << 56) | ((uint64_t)message[8] << 48) |
+            ((uint64_t)message[7] << 40) | ((uint64_t)message[6] << 32) |
+            ((uint64_t)message[5] << 24) | ((uint64_t)message[4] << 16) |
+            ((uint64_t)message[3] << 8) | message[2];
+        local_tmstmp = msg_tmstmp;
+      }
+    }
   }
 
-  cleanup(SIGINT); // Bereinigen und beenden bei Fehler
+  leave_multicast(SIGINT);
   close(sockfd);
 
   return 0;
