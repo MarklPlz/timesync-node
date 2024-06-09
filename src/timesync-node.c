@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <gpiod.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -31,10 +32,11 @@ struct shared_data {
 };
 
 // Global shared data structure
-struct shared_data data = {0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
+struct shared_data data = {0, 0, {0, 0}, PTHREAD_MUTEX_INITIALIZER};
 
 // Thread function to write to CSV
 void *write_to_csv(void *arg) {
+  (void)arg; // Suppress unused parameter warning
   pthread_mutex_lock(&data.lock);
 
   FILE *fp = fopen(CSV_FILE, "a");
@@ -49,8 +51,7 @@ void *write_to_csv(void *arg) {
   uint64_t elapsed_time = (end.tv_sec - data.local_tmstmp.tv_sec) * 1000000 +
                           (end.tv_nsec - data.local_tmstmp.tv_nsec) / 1000;
   elapsed_time = data.recv_tmstmp + (elapsed_time / 5); // every 5ms a tick
-
-  fprintf(fp, "%ld,%d\n", elapsed_time, 1);
+  fprintf(fp, "%" PRIu64 ",%d\n", elapsed_time, 1);
   fclose(fp);
 
   pthread_mutex_unlock(&data.lock);
@@ -59,6 +60,7 @@ void *write_to_csv(void *arg) {
 
 // GPIO event callback
 void gpio_event_callback(struct gpiod_line_event *event, void *arg) {
+  (void)arg; // Suppress unused parameter warning
   if (event->event_type == GPIOD_LINE_EVENT_FALLING_EDGE) {
     pthread_t thread;
     pthread_create(&thread, NULL, write_to_csv, NULL);
@@ -108,6 +110,12 @@ void setup_gpio() {
   }
 
   gpiod_chip_close(chip);
+}
+
+void *setup_gpio_wrapper(void *arg) {
+  (void)arg; // Suppress unused parameter warning
+  setup_gpio();
+  return NULL;
 }
 
 void join_multicast(struct sockaddr_in addr) {
@@ -198,7 +206,7 @@ int main(void) {
 
   // Create a thread to monitor GPIO
   pthread_t gpio_thread;
-  pthread_create(&gpio_thread, NULL, (void *(*)(void *))setup_gpio, NULL);
+  pthread_create(&gpio_thread, NULL, setup_gpio_wrapper, NULL);
 
   while (1) {
     int recvlen = recvfrom(sockfd, message, BUFFSIZE, 0,
