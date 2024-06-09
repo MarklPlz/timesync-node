@@ -4,6 +4,9 @@ CC = gcc
 # Compiler flags
 CFLAGS = -Wall -Wextra -pedantic -O3 -std=c18 -D_POSIX_C_SOURCE=199309L
 
+# Libraries to link against
+LIBS = -lpthread -lgpiod
+
 # Source files
 SRC = src/timesync-node.c
 
@@ -22,7 +25,7 @@ all: $(TARGET)
 
 # Link object files into executables
 $(TARGET): $(OBJ)
-	$(CC) $(OBJ) -o $(TARGET)
+	$(CC) $(OBJ) -o $(TARGET) $(LIBS)
 
 # Clean objects and executables
 clean:

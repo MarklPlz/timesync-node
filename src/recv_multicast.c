@@ -1,114 +1,29 @@
 #include <arpa/inet.h>
-#include <gpiod.h>
-#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <time.h>
+#include <time.h> // clock_gettime(CLOCK_MONOTONIC, &start_time);
 #include <unistd.h>
 
 // https://docs.google.com/document/d/1HvjNvKx5gJ1GtRJtmMu9Jwueku3i7r2VC9iElPTr-Uw/edit#heading=h.fbg9cypbzerm
+// Tick alle 5ms, kein microtick
+
+/*
+To Do:
+- Synchronisieren der Zeit
+- Trigger auf Pin Toggle & Speichern der Zeitstempel
+- Error Handling für maximale Verfügbarkeit
+*/
 
 #define MULTICAST_GROUP "224.0.0.1"
 #define PORT 12345
 #define BUFFSIZE 12
-#define GPIO_CHIP "gpiochip0"
-#define GPIO_LINE 17
-#define CSV_FILE "timestamps_3.csv"
 
 int sockfd;
 struct in_addr mreq;
-
-// Structure to hold shared data
-struct shared_data {
-  uint16_t recv_msgcnt;
-  uint64_t recv_tmstmp;
-  struct timespec local_tmstmp;
-  pthread_mutex_t lock;
-};
-
-// Global shared data structure
-struct shared_data data = {0, 0, 0, PTHREAD_MUTEX_INITIALIZER};
-
-// Thread function to write to CSV
-void *write_to_csv(void *arg) {
-  pthread_mutex_lock(&data.lock);
-
-  FILE *fp = fopen(CSV_FILE, "a");
-  if (fp == NULL) {
-    perror("Failed to open file");
-    pthread_mutex_unlock(&data.lock);
-    return NULL;
-  }
-
-  struct timespec end;
-  clock_gettime(CLOCK_MONOTONIC, &end);
-  uint64_t elapsed_time = (end.tv_sec - data.local_tmstmp.tv_sec) * 1000000 +
-                          (end.tv_nsec - data.local_tmstmp.tv_nsec) / 1000;
-  elapsed_time = data.recv_tmstmp + (elapsed_time / 5); // every 5ms a tick
-
-  fprintf(fp, "%ld,%d\n", elapsed_time, 1);
-  fclose(fp);
-
-  pthread_mutex_unlock(&data.lock);
-  return NULL;
-}
-
-// GPIO event callback
-void gpio_event_callback(struct gpiod_line_event *event, void *arg) {
-  if (event->event_type == GPIOD_LINE_EVENT_FALLING_EDGE) {
-    pthread_t thread;
-    pthread_create(&thread, NULL, write_to_csv, NULL);
-    pthread_detach(thread);
-  }
-}
-
-void setup_gpio() {
-  struct gpiod_chip *chip;
-  struct gpiod_line *line;
-  int ret;
-
-  chip = gpiod_chip_open_by_name(GPIO_CHIP);
-  if (!chip) {
-    perror("Open chip failed");
-    exit(EXIT_FAILURE);
-  }
-
-  line = gpiod_chip_get_line(chip, GPIO_LINE);
-  if (!line) {
-    perror("Get line failed");
-    gpiod_chip_close(chip);
-    exit(EXIT_FAILURE);
-  }
-
-  ret = gpiod_line_request_falling_edge_events(line, "gpio-monitor");
-  if (ret < 0) {
-    perror("Request events failed");
-    gpiod_chip_close(chip);
-    exit(EXIT_FAILURE);
-  }
-
-  struct gpiod_line_event event;
-  while (1) {
-    ret = gpiod_line_event_wait(line, NULL);
-    if (ret < 0) {
-      perror("Wait event failed");
-      break;
-    } else if (ret > 0) {
-      ret = gpiod_line_event_read(line, &event);
-      if (ret < 0) {
-        perror("Read event failed");
-        break;
-      }
-      gpio_event_callback(&event, NULL);
-    }
-  }
-
-  gpiod_chip_close(chip);
-}
 
 void join_multicast(struct sockaddr_in addr) {
 
@@ -183,22 +98,15 @@ int main(void) {
   socklen_t addr_len = sizeof(addr);
 
   uint8_t message[BUFFSIZE];
+  uint16_t recv_msgcnt = 0;
+  uint64_t recv_tmstmp = 0;
   uint16_t recv_crc = 0;
   uint16_t crc_value = 0;
-  struct timespec msg_tmstmp;
 
-  // Initialize
+  // Initialize Timestamps
+  struct timespec msg_tmstmp, local_tmstmp;
   clock_gettime(CLOCK_MONOTONIC, &msg_tmstmp);
-
-  pthread_mutex_lock(&data.lock);
-  data.recv_msgcnt = 0;
-  data.recv_tmstmp = 0;
-  data.local_tmstmp = msg_tmstmp;
-  pthread_mutex_unlock(&data.lock);
-
-  // Create a thread to monitor GPIO
-  pthread_t gpio_thread;
-  pthread_create(&gpio_thread, NULL, (void *(*)(void *))setup_gpio, NULL);
+  local_tmstmp = msg_tmstmp;
 
   while (1) {
     int recvlen = recvfrom(sockfd, message, BUFFSIZE, 0,
@@ -218,23 +126,21 @@ int main(void) {
 
       // Check CRC
       if (recv_crc == crc_value) {
-        printf("\nReceived a message!\n");
-
-        pthread_mutex_lock(&data.lock);
-        data.recv_msgcnt = (message[1] << 8) | message[0];
-        data.recv_tmstmp =
+        recv_msgcnt = (message[1] << 8) | message[0];
+        recv_tmstmp =
             ((uint64_t)message[9] << 56) | ((uint64_t)message[8] << 48) |
             ((uint64_t)message[7] << 40) | ((uint64_t)message[6] << 32) |
             ((uint64_t)message[5] << 24) | ((uint64_t)message[4] << 16) |
             ((uint64_t)message[3] << 8) | message[2];
-        data.local_tmstmp = msg_tmstmp;
-        pthread_mutex_unlock(&data.lock);
+        local_tmstmp = msg_tmstmp;
+        printf("\nreceived a message!\n");
+        printf("recv_msgcnt: %X\n", recv_msgcnt);
+        printf("recv_tmstmp: %lX\n", recv_tmstmp);
+        printf("recv_crc: %X\n", recv_crc);
       }
     }
   }
 
-  // Clean up
-  pthread_join(gpio_thread, NULL);
   leave_multicast(SIGINT);
   close(sockfd);
 
