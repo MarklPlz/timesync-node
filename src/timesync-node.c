@@ -11,8 +11,6 @@
 #include <time.h>
 #include <unistd.h>
 
-// https://docs.google.com/document/d/1HvjNvKx5gJ1GtRJtmMu9Jwueku3i7r2VC9iElPTr-Uw/edit#heading=h.fbg9cypbzerm
-
 #define MULTICAST_GROUP "224.0.0.1"
 #define PORT 12345
 #define BUFFSIZE 12
