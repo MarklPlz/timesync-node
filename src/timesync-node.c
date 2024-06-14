@@ -46,10 +46,15 @@ void *write_to_csv(void *arg) {
 
   struct timespec end;
   clock_gettime(CLOCK_MONOTONIC, &end);
-  uint64_t elapsed_time = (end.tv_sec - data.local_tmstmp.tv_sec) * 1000000 +
-                          (end.tv_nsec - data.local_tmstmp.tv_nsec) / 1000;
+  uint64_t elapsed_time = (end.tv_sec - data.local_tmstmp.tv_sec) * 1000 +
+                          (end.tv_nsec - data.local_tmstmp.tv_nsec) / 1000000;
   elapsed_time = data.recv_tmstmp + (elapsed_time / 5); // every 5ms a tick
-  fprintf(fp, "%" PRIu64 ",%d\n", elapsed_time, 1);
+  if (data.recv_msgcnt) {
+    fprintf(fp, "%" PRIu64 ",%d\n", elapsed_time, 1);
+  }
+  else {
+    fprintf(fp, "%" PRIu64 ",%d\n", elapsed_time, 0);
+  }
   fclose(fp);
 
   pthread_mutex_unlock(&data.lock);
@@ -220,12 +225,10 @@ int main(void) {
     // Check 12 Byte Message
     if (recvlen == 12) {
       crc_value = calc_crc16(message, BUFFSIZE - 2, 0x1021, 0x0000);
-      recv_crc = (message[10] << 8) | message[11]; // CRC BIG ENDIANESS
+      recv_crc = (message[11] << 8) | message[10]; // CRC LITTLE ENDIANESS
 
       // Check CRC
       if (recv_crc == crc_value) {
-        printf("\nReceived a message!\n");
-
         pthread_mutex_lock(&data.lock);
         data.recv_msgcnt = (message[1] << 8) | message[0];
         data.recv_tmstmp =
